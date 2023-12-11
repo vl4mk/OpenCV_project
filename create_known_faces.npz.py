@@ -3,7 +3,7 @@ import numpy as np
 import os
 
 # Путь к директории с известными лицами
-known_faces_dir = "know_faces"
+known_faces_dir = "/home/r2d2/PycharmProjects/know_faces"
 
 # Получите список поддиректорий (по одной поддиректории на каждую личность)
 known_people = [d for d in os.listdir(known_faces_dir) if os.path.isdir(os.path.join(known_faces_dir, d))]

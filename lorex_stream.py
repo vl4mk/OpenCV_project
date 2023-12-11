@@ -79,7 +79,7 @@ def send_command():
 ip_address = "10.20.37.161"
 port = 554  # Порт по умолчанию для RTSP-потока
 username = "admin"
-password = "d5568949!"
+password = ""
 
 # URL для захвата потока с камеры с учетными данными
 url = f"rtsp://{username}:{password}@{ip_address}:{port}/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif"
