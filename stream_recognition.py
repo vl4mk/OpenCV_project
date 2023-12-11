@@ -7,7 +7,7 @@ import time
 import socket
 import struct
 import pickle
-import threading  # Импортируйте библиотеку threading
+import threading
 from datetime import datetime, timedelta
 
 
@@ -15,51 +15,66 @@ arrival_times = {
     "Vladimir": "08:00",
     "Anton": "08:00",
     "Jeka": "08:00",
-    "Paul": "08:00",
-    "Rustem": "08:00",
-    "Darina": "08:40",
-    "Eric": "07:40",
+    "Paul": "18:00",
+    "Rustem": "08:30",
+    "Darina": "09:00",
+    "Eric": "08:00",
     "Alex": "08:00",
     "Daniel": "08:00",
-    "Vasya": "08:00",
-    "Artur": "08:00",
-    "Sergei": "08:00",
+    "Vasya": "18:00",
+    "Artur": "18:00",
+    "Sergei": "18:00",
+    "Kirill": "18:00",
 
-    # и так далее...
 }
 
-sent_signals = {}  # Отслеживаем, были ли уже отправлены сигналы для каждого сотрудника
 
-# В начале кода
-zoom_factor = 1.0  # Текущий коэффициент масштабирования
-zoom_step = 1.0    # Шаг изменения зума (в данном случае, в 2 раза увеличиваем)
+sent_signals = {}  # We track whether signals have already been sent for each employee
 
-# Инициализация блокировки
+# Initialize lock
 sent_signals_lock = threading.Lock()
 
 command_queue = queue.Queue()
 
-# Инициализация детектора лиц
+# Initialize the face detector
 face_detector = dlib.get_frontal_face_detector()
 
-# Инициализация модели для предсказания ключевых точек лица (shape predictor)
+# Initialize the model to predict key points of the face (shape predictor)
 shape_predictor = dlib.shape_predictor("shape_predictor_68_face_landmarks.dat")
 
-# Считывание базы данных с известными лицами и их эмбеддингами
+# Reading a database of famous faces and their embeddings
 known_data = np.load("known_faces.npz")
 known_faces = known_data["faces"]
 known_embeddings = known_data["embeddings"]
 
-# Определение порога сравнения
-threshold = 0.40
+# Determine the comparison threshold
+threshold = 0.48
 
-last_command_time = 0
-command_delay = 5  # Например, 5 секунд между командами
 
-last_face_detected = 0
-face_detect_interval = 5  # 5 seconds
+def reset_sent_signals_daily():
+    while True:
+        # Определите, сколько времени осталось до полуночи
+        now = datetime.now()
+        midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        sleep_time = (midnight - now).total_seconds()
 
-# Функция для отправки команд на Raspberry Pi
+        # Ждать до полуночи
+        time.sleep(sleep_time)
+
+        # Безопасно очистить словарь sent_signals
+        with sent_signals_lock:
+            print("Lock acquired reset_sent_signals_daily")
+            sent_signals.clear()
+            print("Sent signals reset for the day.")
+            print(sent_signals)
+            print("Lock released reset_sent_signals_daily ")
+
+
+thread = threading.Thread(target=reset_sent_signals_daily)
+#thread.daemon = True  # Это позволяет программе завершиться, даже если поток активен
+thread.start()
+
+# Function to send commands to Raspberry Pi
 def send_command():
     rpi_ip = "10.20.36.138" #211 wireless
     rpi_port = 6001
@@ -67,41 +82,43 @@ def send_command():
     client_socket.connect((rpi_ip, rpi_port))
 
     while True:
-        command, send_time = command_queue.get()
+        command, send_time, name = command_queue.get()
         if command == "exit":
             break
 
-        # Ожидаем, пока не придет время отправки команды
+        # Wait until it's time to send the command
         while datetime.now() < send_time:
             time.sleep(0.1)
 
-        try:
-            client_socket.send(command.encode())
-        except (BrokenPipeError, socket.error):
-            print("Соединение потеряно. Пытаемся переподключиться...")
-            client_socket.close()
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.connect((rpi_ip, rpi_port))
-            client_socket.send(command.encode())  # Повторная попытка отправить команду после переподключения
+        # Формирование сообщения, объединяющего команду и имя
+        message = f"{command} {name}"
+        client_socket.send(message.encode())
+
+        # Переподключение в случае потери соединения
+        print("Connection lost. Trying to reconnect...")
+        client_socket.close()
+        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_socket.connect((rpi_ip, rpi_port))
+        client_socket.send(message.encode())
+
 
     client_socket.close()
+    print("after closed client socket")
 
 
-
-# Создание сокета для приема видеопотока
-server_ip = "0.0.0.0"  # Слушаем все интерфейсы
+# Create a socket to receive a video stream
+server_ip = "0.0.0.0"  # Listen to all interfaces
 server_port = 5000
-
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server_socket.bind((server_ip, server_port))
-server_socket.listen(1)  # Ожидание соединения
+server_socket.listen(1)  # Waiting for connection
 
-print(f"Ожидание соединения от Raspberry Pi ({server_ip}:{server_port})...")
+print(f"Waiting for connection from Raspberry Pi ({server_ip}:{server_port})...")
 
 client_socket, client_address = server_socket.accept()
-print(f"Подключение от {client_address}")
+print(f"Connecting from {client_address}")
 
-# Запустите поток для отправки команд на Raspberry Pi
+# Start a thread to send commands to the Raspberry Pi
 command_thread = threading.Thread(target=send_command)
 command_thread.start()
 
@@ -122,17 +139,16 @@ while True:
     frame_data = data[:msg_size]
     data = data[msg_size:]
 
-    # Десериализация кадра и применение цифрового зума
+    # Deserialize frame
     frame = pickle.loads(frame_data)
-    frame = cv2.resize(frame, None, fx=zoom_factor, fy=zoom_factor, interpolation=cv2.INTER_LINEAR)
 
-    # Обработка и распознавание лиц в кадре
+    # Processing and recognition of faces in the frame
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_detector(gray)
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     for face in faces:
-        name = "Unknown"  # Сначала помечаем лицо как неизвестное
+        name = "Unknown"  # First we mark the face as unknown
 
         x, y, w, h = face.left(), face.top(), face.width(), face.height()
         face_encoding = face_recognition.face_encodings(rgb_frame, [(y, x + w, y + h, x)])
@@ -151,13 +167,21 @@ while True:
                 expected_arrival = datetime.strptime(arrival_times[name], "%H:%M").time()
 
                 with sent_signals_lock:
-                    if current_time > expected_arrival and name not in sent_signals:
-                        # персона опоздала и сигнал ещё не был отправлен
-                        print(f"Отправлен сигнал для {name}")
-                        command_queue.put(("fire", datetime.now()))
-                        print(command_queue)
-                        sent_signals[name] = True  # Указываем, что для этой персоны сигнал уже был отправлен
+                    if current_time < expected_arrival and name not in sent_signals:
+                        print("Lock acquired register sent_signals")
+                        print(f"Send register signal for {name}  {datetime.now()} ")
+                        command_queue.put(("registered", datetime.now(), name))
+                        sent_signals[name] = True
                         print(sent_signals)
+                        print("Lock release register sent_signals")
+                    elif current_time > expected_arrival and name not in sent_signals:
+                        print("Lock acquired late sent_signals")
+                        print(f"Send late signal for {name}  {datetime.now()} ")
+                        command_queue.put(("fire", datetime.now(), name))
+                        sent_signals[name] = True  # Indicate that a signal has already been sent for this person
+                        print(sent_signals)
+                        print("Lock release late sent_signals")
+
 
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.putText(frame, name, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
@@ -167,7 +191,9 @@ while True:
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# Закрытие сокетов и ожидание завершения потока с командами
+
+
+# Closing sockets and waiting for the command thread to complete
 client_socket.close()
 server_socket.close()
 command_thread.join()
